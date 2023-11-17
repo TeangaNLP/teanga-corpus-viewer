@@ -39,29 +39,31 @@ pub struct LayerDesc {
     pub default: Option<Vec<String>>,
 }
 
+#[derive(Debug)]
 pub struct DocSecs<'a,'b> {
     pub content : &'a str,
     pub annos : Vec<Vec<Anno<'a,'b>>>
 }
 
+#[derive(Debug)]
 pub struct Anno<'a,'b> {
     pub layer_name : &'b str,
     pub data : Option<&'a Data>,
     pub left_complete : bool,
     pub right_complete : bool,
-    pub left_idx : usize,
-    pub right_idx : usize
+    pub start : usize,
+    pub end : usize
 }
 
 impl<'a,'b> Anno<'a,'b> {
-    pub fn new(layer_name : &'b str,  data : Option<&'a Data>, left_idx : usize, right_idx : usize) -> Self {
+    pub fn new(layer_name : &'b str,  data : Option<&'a Data>, start : usize, end : usize) -> Self {
         Anno {
             layer_name,
             data,
             left_complete: true,
             right_complete: true,
-            left_idx,
-            right_idx
+            start,
+            end
         }
     }
 }
@@ -114,14 +116,14 @@ impl Document {
             let mut last_i = 0;
             for (i,j) in calc_divisions(&base_annos) {
                 for anno in base_annos.iter() {
-                    if anno.left_idx >= i && anno.right_idx <= j {
-                        let anno2 = if anno.left_idx == i && anno.right_idx == j {
+                    if anno.start >= i && anno.end <= j {
+                        let anno2 = if anno.start == i && anno.end == j {
                             Anno::new(anno.layer_name, anno.data, i, j)
-                        } else if anno.left_idx == i {
+                        } else if anno.start == i {
                             let mut anno = Anno::new(anno.layer_name, anno.data, i, j);
                             anno.left_complete = false;
                             anno
-                        } else if anno.right_idx == j {
+                        } else if anno.end == j {
                             let mut anno = Anno::new(anno.layer_name, anno.data, i, j);
                             anno.right_complete = false;
                             anno
@@ -187,15 +189,15 @@ impl Document {
                         let mut last_d = None;
                         for (i,d) in data.iter() {
                             match start {
-                                Some(start) => base.push(Anno::new(name, last_d, start, indexes[*i].right_idx)),
+                                Some(start) => base.push(Anno::new(name, last_d, start, indexes[*i].end)),
                                 None => {}
                             }
-                            start = Some(indexes[*i].left_idx);
+                            start = Some(indexes[*i].start);
                             last_d = Some(d);
                         }
                         match start {
                             Some(start) => base.push(Anno::new(name, 
-                                    last_d, start, indexes[indexes.len()-1].right_idx)),
+                                    last_d, start, indexes[indexes.len()-1].end)),
                             None => {}
                         }
                         Ok((base,on))
@@ -226,13 +228,13 @@ impl Document {
                         let mut start = None;
                         for i in data.iter() {
                             match start {
-                                Some(start) => base.push(Anno::new(name, None, start, indexes[*i].right_idx)),
+                                Some(start) => base.push(Anno::new(name, None, start, indexes[*i].end)),
                                 None => {}
                             }
-                            start = Some(indexes[*i].left_idx);
+                            start = Some(indexes[*i].start);
                         }
                         match start {
-                            Some(start) => base.push(Anno::new(name, None, start, indexes[indexes.len()-1].right_idx)),
+                            Some(start) => base.push(Anno::new(name, None, start, indexes[indexes.len()-1].end)),
                             None => {}
                         }
                         Ok((base,on))
@@ -252,7 +254,7 @@ impl Document {
                         let (indexes, on) = self.base_annos(&this_meta.on, meta)?;
                         let mut base = Vec::new();
                         for (i,d) in data.iter() {
-                            base.push(Anno::new(name, Some(d), indexes[*i].left_idx, indexes[*i].right_idx));
+                            base.push(Anno::new(name, Some(d), indexes[*i].start, indexes[*i].end));
                         }
                         Ok((base,on))
                     }
@@ -271,7 +273,7 @@ impl Document {
                         let (indexes, on) = self.base_annos(&this_meta.on, meta)?;
                         let mut base = Vec::new();
                         for i in data.iter() {
-                            base.push(Anno::new(name, None, indexes[*i].left_idx, indexes[*i].right_idx));
+                            base.push(Anno::new(name, None, indexes[*i].start, indexes[*i].end));
                         }
                         Ok((base,on))
                     }
@@ -290,7 +292,7 @@ impl Document {
                         let (indexes, on) = self.base_annos(&this_meta.on, meta)?;
                         let mut base = Vec::new();
                         for (i,j,d) in data.iter() {
-                            base.push(Anno::new(name, Some(d), indexes[*i].left_idx, indexes[*j-1].right_idx));
+                            base.push(Anno::new(name, Some(d), indexes[*i].start, indexes[*j-1].end));
                         }
                         Ok((base,on))
                     }
@@ -309,7 +311,7 @@ impl Document {
                         let (indexes, on) = self.base_annos(&this_meta.on, meta)?;
                         let mut base = Vec::new();
                         for (i,j) in data.iter() {
-                            base.push(Anno::new(name, None, indexes[*i].left_idx, indexes[*j-1].right_idx));
+                            base.push(Anno::new(name, None, indexes[*i].start, indexes[*j-1].end));
                         }
                         Ok((base,on))
                     }
@@ -320,32 +322,53 @@ impl Document {
 }
 
 fn calc_divisions<'a,'b>(annos : &Vec<Anno<'a,'b>>) -> Vec<(usize, usize)> {
-    let mut divisions = Vec::new();
-    for a in annos.iter() {
-        let mut overlaps = Vec::new();
-        for (i,j) in divisions.iter() {
-            if a.left_idx < *j && a.right_idx > *i {
-                overlaps.push((*i,*j));
+    let mut divisions = annos.iter().map(|a| (a.start, a.end)).collect::<Vec<(usize,usize)>>();
+    'outer: loop {
+        // We are looking for overlaps
+        //    i.0     i.1
+        //    -----------
+        //    |         |
+        //    -----------
+        //        -----------
+        //        |         |
+        //        -----------
+        //        j.0     j.1
+        //
+        // and map them to three blocks
+        //
+        //   i.0  j.0  i.1 j.1
+        //   -----------------
+        //   |   |   |   |   |
+        //   -----------------
+        for i in 0..divisions.len() {
+            for j in i+1..divisions.len() {
+                if divisions[j].0 > divisions[i].0 && divisions[j].0 < divisions[i].1 
+                    && divisions[j].1 > divisions[i].1 {
+                        let (i0, i1) = divisions.remove(i);
+                        let (j0, j1) = divisions.remove(j-1);
+                        divisions.push((i0, j0));
+                        divisions.push((j0, j1));
+                        divisions.push((i1, j1));
+                        continue 'outer;
+                }
             }
         }
-        for (i,j) in overlaps.iter() {
-            divisions.retain(|(x,y)| x != i && y != j);
-        }
-        let mut start = a.left_idx;
-        let mut end = 0;
-        for (i,j) in overlaps.iter() {
-            if start < *i {
-                divisions.push((start, *i));
-            }
-            divisions.push((*i, *j));
-            start = *i;
-            end = *j;
-        }
-        if end < a.right_idx {
-            divisions.push((end, a.right_idx));
-        }
+        break;
     }
-    divisions.sort();
+    // Sort by start and the by end in reverse order
+    divisions.sort_by(|a,b| {
+        if a.0 < b.0 {
+            std::cmp::Ordering::Less
+        } else if a.0 > b.0 {
+            std::cmp::Ordering::Greater
+        } else if a.1 < b.1 {
+            std::cmp::Ordering::Greater
+        } else if a.1 > b.1 {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
     divisions
 }
 
@@ -451,3 +474,45 @@ impl Display for DataType {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_base_annos() {
+        let corpus = crate::serialization::read_corpus_from_json_string(
+            "{\"_meta\":{\"text\":{\"type\":\"characters\"},\"tokens\":{\"type\":\"span\",\"on\":\"text\"}},\"_order\":[\"Kjco\"],
+\"Kjco\":{\"text\":\"This is a document.\",\"tokens\":[[0,4],[5,7],[8,9],[10,19]]},
+\"abcd\":{\"text\":\"This is a second document\"}}").unwrap();
+        let doc = &corpus.documents[0].1;
+        let meta = &corpus.meta;
+        let (base, on) = doc.base_annos("tokens", meta).unwrap();
+        assert_eq!(on, "text");
+        assert_eq!(base.len(), 4);
+        assert_eq!(base[0].start, 0);
+        assert_eq!(base[0].end, 4);
+        assert_eq!(base[1].start, 5);
+        assert_eq!(base[1].end, 7);
+    }
+
+    #[test]
+    fn test_calc_divisions() {
+        let corpus = crate::serialization::read_corpus_from_json_string(
+            "{\"_meta\":{\"text\":{\"type\":\"characters\"},\"tokens\":{\"type\":\"span\",\"on\":\"text\"}},\"_order\":[\"Kjco\"],
+\"Kjco\":{\"text\":\"This is a document.\",\"tokens\":[[0,4],[5,7],[8,9],[10,19]]},
+\"abcd\":{\"text\":\"This is a second document\"}}").unwrap();
+        let doc = &corpus.documents[0].1;
+        let meta = &corpus.meta;
+        let (base, on) = doc.base_annos("tokens", meta).unwrap();
+        let divisions = calc_divisions(&base);
+        assert_eq!(divisions.len(), 4);
+        assert_eq!(divisions[0].0, 0);
+        assert_eq!(divisions[0].1, 4);
+        assert_eq!(divisions[1].0, 5);
+        assert_eq!(divisions[1].1, 7);
+        assert_eq!(divisions[2].0, 8);
+        assert_eq!(divisions[2].1, 9);
+        assert_eq!(divisions[3].0, 10);
+        assert_eq!(divisions[3].1, 19);
+    }
+}

@@ -20,6 +20,35 @@ pub struct DocumentViewProps {
     pub on_prev_doc: Callback<String>,
 }
 
+fn annos_to_html(docsecs: &teanga::DocSecs) -> Html {
+    let mut html = Vec::new();
+    let mut last_i = 0;
+    let mut last_char_i = 0;
+    let mut char_iter = docsecs.content.char_indices();
+    for anno_list in docsecs.annos.iter() {
+        for anno in anno_list.iter() {
+            if anno.start > last_i {
+                //let j = char_iter.nth(anno.start - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
+                let j = anno.start - last_i;
+                html.push(html! { <span>{docsecs.content[last_char_i..j].to_string()}</span> });
+                last_i = anno.start;
+                last_char_i = j;
+            }
+            //let j = char_iter.nth(anno.end - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
+            let j = anno.end - last_i;
+            html.push(html! {
+                <span class="border-green-900 border-2">{ docsecs.content[last_char_i..j].to_string() }</span>
+            });
+            last_char_i = j;
+            last_i = anno.end;
+        }
+    }
+    if last_char_i < docsecs.content.len() {
+        html.push(html! { <span>{docsecs.content[last_char_i..].to_string()}</span> });
+    }
+    html.into_iter().collect::<Html>()
+}
+
 #[function_component]
 fn DocumentView(props : &DocumentViewProps) -> Html {
     let on_next_doc = props.on_next_doc.clone();
@@ -32,21 +61,23 @@ fn DocumentView(props : &DocumentViewProps) -> Html {
             <div class="grow">
                 <h2 class="text-xl font-bold">{ "Document" }</h2>
                 {{
-                    let text_layers = props.document.get_text_layers();
-                    props.document.get_annos(&props.meta);
-                    if text_layers.len() == 1 {
-                        html! {
-                            <div>{ text_layers.iter().next().unwrap().1 }</div>
+                    match props.document.get_annos(&props.meta)  {
+                        Ok(docsecs) => {
+                            docsecs.iter().map(|(name, docsec)| {
+                                html! {
+                                    <div class="p-4">
+                                        <h3 class="font-semibold mb-4">{ name }</h3>
+                                        <span>{ format!("{:?}", docsec) }</span>
+                                        <div class="text-sm font-medium bg-bwhite border border-gray-400 rounded-md">
+                                            { annos_to_html(docsec) }
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Html>()
                         }
-                    } else {
-                        text_layers.iter().map(|(layer_name, layer)| {
-                            html! {
-                                <div>
-                                    <h3 class="font-semibold">{ layer_name }</h3>
-                                    <div>{ layer }</div>
-                                </div>
-                            }
-                        }).collect::<Html>()
+                        Err(e) => html! {
+                            <span>{ format!("Error: {}", e) }</span>
+                        }
                     }
                 }}
                 //<div><ruby class="border-green-900 border-2 rounded-md">{"Lorem"}<rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{"dolor"}</rt></ruby> {" ipsum dolor sit amet, consectetur adipiscing elit. Nulla euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl. Donec euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl. Donec euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl." }</div>
@@ -125,8 +156,9 @@ impl Component for App {
     fn create(_ctx: &Context<Self>) -> Self {
         let app = App {
             corpus: serialization::read_corpus_from_json_string(
-                        "{\"_meta\":{\"text\":{\"type\":\"characters\"}},\"_order\":[\"Kjco\"],
-\"Kjco\":{\"text\":\"This is a document.\"},\"abcd\":{\"text\":\"This is a second document\"}}").unwrap(),
+            "{\"_meta\":{\"text\":{\"type\":\"characters\"},\"tokens\":{\"type\":\"span\",\"on\":\"text\"}},\"_order\":[\"Kjco\"],
+\"Kjco\":{\"text\":\"This is a document.\",\"tokens\":[[0,4],[5,7],[8,9],[10,19]]},
+\"abcd\":{\"text\":\"This is a second document\"}}").unwrap(),
             layers: vec![
                 Layer { name: "Tokens".to_string(), selected: true },
                 Layer { name: "POS".to_string(), selected: false },
@@ -143,7 +175,7 @@ impl Component for App {
                 true
             },
             Msg::NextDoc => {
-                if self.doc_no < self.corpus.documents.len() {
+                if self.doc_no < self.corpus.documents.len() - 1 {
                     self.doc_no += 1;
                 }
                 true

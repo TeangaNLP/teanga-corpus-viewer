@@ -5,6 +5,8 @@ use std::collections::HashMap;
 mod teanga;
 mod serialization;
 
+use teanga::Data;
+
 #[derive(Clone, PartialEq, Properties)]
 pub struct Layer {
     name: String,
@@ -25,20 +27,42 @@ fn annos_to_html(docsecs: &teanga::DocSecs) -> Html {
     let mut last_i = 0;
     let mut last_char_i = 0;
     let mut char_iter = docsecs.content.char_indices();
+    char_iter.next();
     for anno_list in docsecs.annos.iter() {
         for anno in anno_list.iter() {
             if anno.start > last_i {
-                //let j = char_iter.nth(anno.start - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
-                let j = anno.start - last_i;
+                let j = char_iter.nth(anno.start - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
                 html.push(html! { <span>{docsecs.content[last_char_i..j].to_string()}</span> });
                 last_i = anno.start;
                 last_char_i = j;
             }
-            //let j = char_iter.nth(anno.end - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
-            let j = anno.end - last_i;
-            html.push(html! {
-                <span class="border-green-900 border-2">{ docsecs.content[last_char_i..j].to_string() }</span>
-            });
+            let j = char_iter.nth(anno.end - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
+            match anno.data {
+                None => html.push(html! {
+                    <span class="border-green-900 border-2">{ docsecs.content[last_char_i..j].to_string() }</span>
+                }),
+                Some(Data::String(ref s)) => {
+                    html.push(html! { 
+                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
+                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s }</rt>
+                    </ruby>
+                    });
+                },
+                Some(Data::Link(ref i)) => {
+                    html.push(html! {
+                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
+                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ i }</rt>
+                    </ruby>
+                    });
+                },
+                Some(Data::TypedLink(ref i, ref s)) => {
+                    html.push(html! {
+                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
+                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s.to_owned() + "=" + &i.to_string() }</rt>
+                        </ruby>
+                    });
+                }
+            }
             last_char_i = j;
             last_i = anno.end;
         }
@@ -80,7 +104,6 @@ fn DocumentView(props : &DocumentViewProps) -> Html {
                         }
                     }
                 }}
-                //<div><ruby class="border-green-900 border-2 rounded-md">{"Lorem"}<rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{"dolor"}</rt></ruby> {" ipsum dolor sit amet, consectetur adipiscing elit. Nulla euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl. Donec euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl. Donec euismod, nisl vitae ultrices ultricies, nunc nisl ultricies nunc, vitae ultricies nisl nisl eget nisl." }</div>
             </div>
             <div class="basis-1">
                 <button class="button h-full" onclick={move |_| on_next_doc.emit("".to_string())}><Icon icon_id={IconId::BootstrapChevronCompactRight}/></button>

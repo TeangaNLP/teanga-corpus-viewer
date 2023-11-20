@@ -41,7 +41,7 @@ fn DocumentView(props : &DocumentViewProps) -> Html {
                                         <h3 class="font-semibold mb-4">{ name }</h3>
                                         <span>{ format!("{:?}", docsec) }</span>
                                         <div class="text-sm font-medium bg-bwhite border border-gray-400 rounded-md">
-                                            { render::render_annos(&docsec) }
+                                            { render::render_annos(&docsec, props.layers.iter().map(|x| (x.name.as_str(), x.selected)).collect()) }
                                         </div>
                                     </div>
                                 }
@@ -133,8 +133,8 @@ impl Component for App {
 ,\"pos\":[\"DT\",\"VBZ\",\"DT\",\"NN\"]},
 \"abcd\":{\"text\":\"This is a second document\"}}").unwrap(),
             layers: vec![
-                Layer { name: "Tokens".to_string(), selected: true },
-                Layer { name: "POS".to_string(), selected: false },
+                Layer { name: "tokens".to_string(), selected: true },
+                Layer { name: "pos".to_string(), selected: false },
             ],
             doc_no: 0,
         };

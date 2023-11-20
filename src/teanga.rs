@@ -378,7 +378,7 @@ impl LayerTree {
         } else if self.data.contains_key(b) && self.data.values().any(|v| v.contains(a)) {
             Ordering::Greater
         } else {
-            for (k,v) in self.data.iter() {
+            for (_,v) in self.data.iter() {
                 if v.contains(a) && v.contains(b) {
                     return v.cmp_str(a,b);
                 }

@@ -2,6 +2,14 @@
 
 use yew::prelude::*;
 use crate::teanga::{DocSecs, Data, Anno};
+use std::collections::HashMap;
+
+const N_COLORS : usize = 17;
+const COLORS : [&'static str; 17] = [
+    "red", "lime", "cyan", "violet",
+    "orange", "green", "sky", "purple",
+    "amber", "emerald", "blue", "fuchsia",
+    "yellow", "teal", "indigo", "pink", "rose" ];
 
 /// An iterator over a string that returns substrings of the string
 /// that follow unicode code points
@@ -48,11 +56,20 @@ impl<'a> UniStrIter<'a> {
     }
 }
 
-pub fn render_annos(docsec : &DocSecs) -> Html {
-    annos_to_html(&mut UniStrIter::from_str(docsec.content), &docsec.annos, 0, None)
+pub fn render_annos(docsec : &DocSecs, enabled_layers : Vec<(&str,bool)>) -> Html {
+    let mut layer_colors = HashMap::new();
+    let mut i = 0;
+    for (layer, include) in enabled_layers.iter() {
+        if *include {    
+            layer_colors.insert(*layer, COLORS[i % N_COLORS]);
+        }
+        i += 1;
+    }
+    annos_to_html(&mut UniStrIter::from_str(docsec.content), &docsec.annos, 0, None, &layer_colors)
 }
 
-fn annos_to_html(content : &mut UniStrIter, annos : &Vec<Anno>, i : usize, j : Option<usize>) -> Html {
+fn annos_to_html(content : &mut UniStrIter, annos : &Vec<Anno>, i : usize, j : Option<usize>,
+    colors : &HashMap<&str, &str>) -> Html {
     let mut html = Vec::new();
     let mut last_i = i;
     for anno in annos.iter() {
@@ -61,30 +78,41 @@ fn annos_to_html(content : &mut UniStrIter, annos : &Vec<Anno>, i : usize, j : O
             html.push(html! { {text} });
             last_i = anno.start;
         }
-        match anno.data {
-            None => html.push(html! {
-                <span class="border-green-900 border-2">{ annos_to_html(content, &anno.children, last_i, Some(anno.end)) }</span>
-            }),
-            Some(Data::String(ref s)) => {
-                html.push(html! { 
-                    <ruby class="border-green-900 border-2 rounded-md">{ annos_to_html(content, &anno.children, last_i, Some(anno.end)) }
-                    <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s }</rt>
-                </ruby>
-                });
+        match colors.get(&anno.layer_name) {
+            Some(color) => {
+                let classes1 = classes!(format!("border-{}-900", color), "border-2", "rounded-md");
+                let classes2 = classes!(format!("bg-{}-900", color), "text-white", "border-2", format!("border-{}-900", color), "rounded-t-md");
+                match anno.data {
+                    None => html.push(html! {
+                        <span class={classes1}>
+                        { annos_to_html(content, &anno.children, last_i, Some(anno.end), &colors) }
+                        </span>
+                    }),
+                    Some(Data::String(ref s)) => {
+                        html.push(html! { 
+                            <ruby class={classes1}>{ annos_to_html(content, &anno.children, last_i, Some(anno.end), &colors) }
+                            <rt class={classes2}>{ s }</rt>
+                        </ruby>
+                        });
+                    },
+                    Some(Data::Link(ref i)) => {
+                        html.push(html! {
+                            <ruby class={classes1}>{ annos_to_html(content, &anno.children, last_i, Some(anno.end), &colors) }
+                            <rt class={classes2}>{ i }</rt>
+                        </ruby>
+                        });
+                    },
+                    Some(Data::TypedLink(ref i, ref s)) => {
+                        html.push(html! {
+                            <ruby class={classes1}>{ annos_to_html(content, &anno.children, last_i, Some(anno.end), &colors) }
+                            <rt class={classes2}>{ s.to_owned() + "=" + &i.to_string() }</rt>
+                            </ruby>
+                        });
+                    }
+                }
             },
-            Some(Data::Link(ref i)) => {
-                html.push(html! {
-                    <ruby class="border-green-900 border-2 rounded-md">{ annos_to_html(content, &anno.children, last_i, Some(anno.end)) }
-                    <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ i }</rt>
-                </ruby>
-                });
-            },
-            Some(Data::TypedLink(ref i, ref s)) => {
-                html.push(html! {
-                    <ruby class="border-green-900 border-2 rounded-md">{ annos_to_html(content, &anno.children, last_i, Some(anno.end)) }
-                    <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s.to_owned() + "=" + &i.to_string() }</rt>
-                    </ruby>
-                });
+            None => {
+                html.push(annos_to_html(content, &anno.children, last_i, Some(anno.end), &colors));
             }
         }
         last_i = anno.end;

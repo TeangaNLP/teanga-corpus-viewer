@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 mod teanga;
 mod serialization;
+mod render;
 
-use teanga::Data;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct Layer {
@@ -21,58 +21,6 @@ pub struct DocumentViewProps {
     pub on_next_doc: Callback<String>,
     pub on_prev_doc: Callback<String>,
 }
-
-fn annos_to_html(docsecs: &teanga::DocSecs) -> Html {
-    let mut html = Vec::new();
-    let mut last_i = 0;
-    let mut last_char_i = 0;
-    let mut char_iter = docsecs.content.char_indices();
-    char_iter.next();
-    for anno_list in docsecs.annos.iter() {
-        for anno in anno_list.iter() {
-            if anno.start > last_i {
-                let j = char_iter.nth(anno.start - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
-                html.push(html! { <span>{docsecs.content[last_char_i..j].to_string()}</span> });
-                last_i = anno.start;
-                last_char_i = j;
-            }
-            let j = char_iter.nth(anno.end - last_i - 1).unwrap_or((docsecs.content.len(), ' ')).0;
-            match anno.data {
-                None => html.push(html! {
-                    <span class="border-green-900 border-2">{ docsecs.content[last_char_i..j].to_string() }</span>
-                }),
-                Some(Data::String(ref s)) => {
-                    html.push(html! { 
-                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
-                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s }</rt>
-                    </ruby>
-                    });
-                },
-                Some(Data::Link(ref i)) => {
-                    html.push(html! {
-                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
-                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ i }</rt>
-                    </ruby>
-                    });
-                },
-                Some(Data::TypedLink(ref i, ref s)) => {
-                    html.push(html! {
-                        <ruby class="border-green-900 border-2 rounded-md">{ docsecs.content[last_char_i..anno.start].to_string() }
-                        <rt class="bg-green-900 text-white border-2 border-green-900 rounded-t-md">{ s.to_owned() + "=" + &i.to_string() }</rt>
-                        </ruby>
-                    });
-                }
-            }
-            last_char_i = j;
-            last_i = anno.end;
-        }
-    }
-    if last_char_i < docsecs.content.len() {
-        html.push(html! { <span>{docsecs.content[last_char_i..].to_string()}</span> });
-    }
-    html.into_iter().collect::<Html>()
-}
-
 #[function_component]
 fn DocumentView(props : &DocumentViewProps) -> Html {
     let on_next_doc = props.on_next_doc.clone();
@@ -93,7 +41,7 @@ fn DocumentView(props : &DocumentViewProps) -> Html {
                                         <h3 class="font-semibold mb-4">{ name }</h3>
                                         <span>{ format!("{:?}", docsec) }</span>
                                         <div class="text-sm font-medium bg-bwhite border border-gray-400 rounded-md">
-                                            { annos_to_html(docsec) }
+                                            { render::render_annos(&docsec) }
                                         </div>
                                     </div>
                                 }
@@ -179,8 +127,10 @@ impl Component for App {
     fn create(_ctx: &Context<Self>) -> Self {
         let app = App {
             corpus: serialization::read_corpus_from_json_string(
-            "{\"_meta\":{\"text\":{\"type\":\"characters\"},\"tokens\":{\"type\":\"span\",\"on\":\"text\"}},\"_order\":[\"Kjco\"],
-\"Kjco\":{\"text\":\"This is a document.\",\"tokens\":[[0,4],[5,7],[8,9],[10,19]]},
+            "{\"_meta\":{\"text\":{\"type\":\"characters\"},\"tokens\":{\"type\":\"span\",\"on\":\"text\"},
+\"pos\":{\"type\":\"seq\",\"on\":\"tokens\",\"data\":\"string\"}},\"_order\":[\"Kjco\"],
+\"Kjco\":{\"text\":\"This is a document.\",\"tokens\":[[0,4],[5,7],[8,9],[10,19]]
+,\"pos\":[\"DT\",\"VBZ\",\"DT\",\"NN\"]},
 \"abcd\":{\"text\":\"This is a second document\"}}").unwrap(),
             layers: vec![
                 Layer { name: "Tokens".to_string(), selected: true },

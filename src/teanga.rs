@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use std::fmt::{self, Display, Formatter};
+use std::cmp::Ordering;
 
 #[derive(Debug,Clone)]
 /// A corpus object
@@ -42,17 +43,18 @@ pub struct LayerDesc {
 #[derive(Debug)]
 pub struct DocSecs<'a,'b> {
     pub content : &'a str,
-    pub annos : Vec<Vec<Anno<'a,'b>>>
+    pub annos : Vec<Anno<'a,'b>>
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Anno<'a,'b> {
     pub layer_name : &'b str,
     pub data : Option<&'a Data>,
     pub left_complete : bool,
     pub right_complete : bool,
     pub start : usize,
-    pub end : usize
+    pub end : usize,
+    pub children : Vec<Anno<'a,'b>>,
 }
 
 impl<'a,'b> Anno<'a,'b> {
@@ -63,7 +65,8 @@ impl<'a,'b> Anno<'a,'b> {
             left_complete: true,
             right_complete: true,
             start,
-            end
+            end,
+            children: Vec::new()
         }
     }
 }
@@ -97,6 +100,7 @@ impl Document {
     pub fn get_annos<'a,'b>(&'a self, meta : &'b HashMap<String, LayerDesc>) -> Result<HashMap<String, DocSecs<'a,'b>>, String> where 'a: 'b {
         let mut annos = HashMap::new();
         let mut base_annos = HashMap::new();
+        let layer_tree = LayerTree::from_meta(meta);
         for (layer_name, layer) in self.content.iter() {
             match layer {
                 Layer::Characters(s) => {
@@ -113,9 +117,12 @@ impl Document {
         }
         for (base_layer_name, doc_secs) in annos.iter_mut() {
             let base_annos = base_annos.entry(base_layer_name).or_insert_with(Vec::new);
-            let mut last_i = 0;
-            for (i,j) in calc_divisions(&base_annos) {
-                for anno in base_annos.iter() {
+            let mut annos2 = Vec::new();
+            let divisions = calc_divisions(&base_annos);
+            'anno_loop: for anno in base_annos.iter() {
+                for (i,j) in divisions.iter() {
+                    let i = *i;
+                    let j = *j;
                     if anno.start >= i && anno.end <= j {
                         let anno2 = if anno.start == i && anno.end == j {
                             Anno::new(anno.layer_name, anno.data, i, j)
@@ -133,16 +140,26 @@ impl Document {
                             anno.right_complete = false;
                             anno
                         };
-                        if i == last_i && doc_secs.annos.len() > 0 {
-                            let n = doc_secs.annos.len() - 1;
-                            doc_secs.annos[n].push(anno2);
-                        } else {
-                            doc_secs.annos.push(vec![anno2]);
-                        }
+                        annos2.push(anno2);
+                        continue 'anno_loop;
                      }
                 }
-                last_i = i;
            }
+           
+            annos2.sort_by(|a,b| {
+                if a.start < b.start {
+                    std::cmp::Ordering::Less
+                } else if a.start > b.start {
+                    std::cmp::Ordering::Greater
+                } else if a.end < b.end {
+                    std::cmp::Ordering::Greater
+                } else if a.end > b.end {
+                    std::cmp::Ordering::Less
+                } else {
+                    layer_tree.cmp_str(a.layer_name, b.layer_name)
+                }
+            });
+           doc_secs.annos = merge_annos_recursively(annos2);
         }
 
         Ok(annos)
@@ -153,13 +170,19 @@ impl Document {
         let this_meta = meta.get(name).ok_or_else(|| format!("No meta data for layer {}", name))?;
         match layer {
             Layer::Characters(_) => Err("Base index cannot be called on a character layer".to_string()),
-            Layer::Seq(_) => {
+            Layer::Seq(data) => {
                 match self.content.get(&this_meta.on).ok_or_else(|| format!("No data for layer {}", name))? {
                     Layer::Characters(s) =>
                         Ok(((0..s.len()).map(|i|
                                 Anno::new(name, None, i,i+1)).collect(), &this_meta.on)),
-                    _ => 
-                        self.base_annos(&this_meta.on, meta)
+                    _ => {
+                        let mut base = Vec::new();
+                        let (annos, on) = self.base_annos(&this_meta.on, meta)?;
+                        for (a, d) in annos.iter().zip(data.iter()) {
+                            base.push(Anno::new(name, Some(d), a.start, a.end));
+                        }
+                        Ok((base, on))
+                    }
                 }
             },
             Layer::Div(data) => {
@@ -321,6 +344,78 @@ impl Document {
     }
 }
 
+#[derive(Debug,Clone,PartialEq)]
+struct LayerTree {
+    data : HashMap<String, LayerTree>
+}
+
+impl LayerTree {
+    pub fn from_meta(meta : &HashMap<String, LayerDesc>) -> LayerTree {
+       let mut all_data = HashMap::new();
+       all_data.insert("".to_string(), Vec::new());
+       for (name, desc) in meta.iter() {
+            all_data.entry(desc.on.clone()).or_insert_with(Vec::new).push(name.clone());
+       }
+       fn build_data(name : &str, all_data : &HashMap<String, Vec<String>> ) -> LayerTree {
+           let mut data = HashMap::new();
+           if let Some(names) = all_data.get(name) {
+               for name in names {
+                   data.insert(name.clone(), build_data(name, all_data));
+               }
+           }
+           LayerTree { data }
+       }
+       build_data("", &all_data)
+    }
+    
+    pub fn contains(&self, a : &str) -> bool {
+        self.data.contains_key(a) || self.data.values().any(|v| v.contains(a))
+    }
+
+    pub fn cmp_str(&self, a : &str, b: &str) -> Ordering {
+        if self.data.contains_key(a) && self.data.values().any(|v| v.contains(b)) {
+            Ordering::Less
+        } else if self.data.contains_key(b) && self.data.values().any(|v| v.contains(a)) {
+            Ordering::Greater
+        } else {
+            for (k,v) in self.data.iter() {
+                if v.contains(a) && v.contains(b) {
+                    return v.cmp_str(a,b);
+                }
+            }
+            a.cmp(b)
+        }
+    }
+}
+
+fn merge_annos_recursively<'a,'b>(annos : Vec<Anno<'a, 'b>>) -> Vec<Anno<'a,'b>> {
+    let mut new_annos = Vec::new();
+    let mut span_i = 0;
+    let mut span_j = 0;
+    let mut batch = Vec::new();
+    let mut batch_anno : Option<Anno<'a,'b>> = None;
+    for anno in annos {
+        // Anno is in overlap with the current batch
+        if span_j != 0 && anno.start <= span_j && anno.end >= span_i {
+            batch.push(anno);
+        } else {
+            if let Some(mut batch_anno) = batch_anno {
+                batch_anno.children = merge_annos_recursively(batch);
+                new_annos.push(batch_anno);
+            }
+            batch = Vec::new();
+            span_i = anno.start;
+            span_j = anno.end;
+            batch_anno = Some(anno);
+        }
+    }
+    if let Some(mut batch_anno) = batch_anno {
+        batch_anno.children = merge_annos_recursively(batch);
+        new_annos.push(batch_anno);
+    }
+    new_annos
+}
+
 fn calc_divisions<'a,'b>(annos : &Vec<Anno<'a,'b>>) -> Vec<(usize, usize)> {
     let mut divisions = annos.iter().map(|a| (a.start, a.end)).collect::<Vec<(usize,usize)>>();
     'outer: loop {
@@ -455,7 +550,7 @@ impl Display for LayerType {
 
 
 
-#[derive(Debug,Clone,PartialEq,Serialize,Deserialize)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum DataType {
     String,
     Enum(Vec<String>),
@@ -514,5 +609,54 @@ mod test {
         assert_eq!(divisions[2].1, 9);
         assert_eq!(divisions[3].0, 10);
         assert_eq!(divisions[3].1, 19);
+    }
+
+    #[test]
+    fn test_merge_annos_recursively() {
+
+        let annos = vec![
+            Anno { layer_name: "tokens", data: None, left_complete: true, 
+                right_complete: true, start: 0, end: 4, children: Vec::new() },
+            Anno { layer_name: "tokens", data: None, left_complete: true, 
+                right_complete: true, start: 5, end: 7, children: Vec::new() },
+            Anno { layer_name: "tokens", data: None, left_complete: true, 
+                right_complete: true, start: 9, end: 10, children: Vec::new() },
+            Anno { layer_name: "tokens", data: None, left_complete: true, 
+                right_complete: true, start: 11, end: 19, children: Vec::new() }];
+        let results = merge_annos_recursively(annos.clone());
+        assert_eq!(annos, results);
+    }
+
+    #[test]
+    fn test_layer_tree() {
+        let mut meta = HashMap::new();
+        meta.insert("text".to_string(), LayerDesc {
+            layer_type: LayerType::Characters,
+            on: "".to_string(),
+            data: None,
+            values: None,
+            target: None,
+            default: None
+        });
+        meta.insert("tokens".to_string(), LayerDesc {
+            layer_type: LayerType::Span,
+            on: "text".to_string(),
+            data: None,
+            values: None,
+            target: None,
+            default: None
+        });
+        meta.insert("pos".to_string(), LayerDesc {
+            layer_type: LayerType::Element,
+            on: "tokens".to_string(),
+            data: None,
+            values: None,
+            target: None,
+            default: None
+        });
+        let layer_tree = LayerTree::from_meta(&meta);
+        eprintln!("{:?}", layer_tree);
+        assert!(layer_tree.contains("text"));
+        assert_eq!(layer_tree.cmp_str("tokens", "pos"), Ordering::Less);
     }
 }

@@ -1,7 +1,7 @@
 use thiserror::Error;
 use serde::{Serialize, Deserialize, Deserializer};
 use crate::teanga::{LayerDesc, LayerType, DataType, Layer, Data, Corpus, Document};
-use serde::ser::{SerializeMap, Serializer};
+use serde::ser::{SerializeMap, Serializer, SerializeSeq};
 use serde::de::Visitor;
 use std::collections::HashMap;
 
@@ -388,7 +388,62 @@ impl Layer {
     }
 }
 
+impl Serialize for DataType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        match self {
+            DataType::String => serializer.serialize_str("string"),
+            DataType::Link => serializer.serialize_str("link"),
+            DataType::TypedLink(_) => serializer.serialize_str("link"),
+            DataType::Enum(e) => {
+                let mut seq = serializer.serialize_seq(Some(e.len()))?;
+                for val in e {
+                    seq.serialize_element(val)?;
+                }
+                seq.end()
+            },
+        }
+    }
+}
 
+struct DataTypeVisitor;
+
+impl<'de> Visitor<'de> for DataTypeVisitor {
+    type Value = DataType;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a string  or list of values representing a data type")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where E: serde::de::Error
+    {
+        match value {
+            "string" => Ok(DataType::String),
+            "link" => Ok(DataType::Link),
+            _ => Err(E::custom(format!("Unknown data type {}", value)))
+        }
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where A: serde::de::SeqAccess<'de>
+    {
+        let mut result = Vec::new();
+        while let Some(val) = seq.next_element()? {
+            result.push(val);
+        }
+        Ok(DataType::Enum(result))
+    }
+}
+
+impl<'de> Deserialize<'de> for DataType {
+    fn deserialize<D>(deserializer: D) -> Result<DataType, D::Error>
+        where D: Deserializer<'de>
+    {
+        deserializer.deserialize_any(DataTypeVisitor)
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum TeangaError {

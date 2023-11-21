@@ -4,8 +4,8 @@ use yew::prelude::*;
 use crate::teanga::{DocSecs, Data, Anno};
 use std::collections::HashMap;
 
-const N_COLORS : usize = 17;
-const COLORS : [&'static str; 17] = [
+pub const N_COLORS : usize = 17;
+pub const COLORS : [&'static str; 17] = [
     "red", "lime", "cyan", "violet",
     "orange", "green", "sky", "purple",
     "amber", "emerald", "blue", "fuchsia",
